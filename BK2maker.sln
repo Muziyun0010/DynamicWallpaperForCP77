@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.12.35514.174
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BK2maker", "BK2maker.csproj", "{075C2BA1-5BCC-4A47-A7EA-B10B9D2D3559}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WolvenKit.Common", "..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Common\WolvenKit.Common.csproj", "{14599DDF-0049-4FB6-9C6C-88602246DC0C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WolvenKit.Core", "..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Core\WolvenKit.Core.csproj", "{60D04FE2-7A1D-4D0B-A1BF-C2C49EED8C2C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WolvenKit.RED4", "..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.RED4\WolvenKit.RED4.csproj", "{A075BBA9-2839-4446-83E6-50A03506647C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{075C2BA1-5BCC-4A47-A7EA-B10B9D2D3559}.Debug|Any CPU.ActiveCfg = Release|Any CPU
+		{075C2BA1-5BCC-4A47-A7EA-B10B9D2D3559}.Debug|Any CPU.Build.0 = Release|Any CPU
+		{075C2BA1-5BCC-4A47-A7EA-B10B9D2D3559}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{075C2BA1-5BCC-4A47-A7EA-B10B9D2D3559}.Release|Any CPU.Build.0 = Release|Any CPU
+		{14599DDF-0049-4FB6-9C6C-88602246DC0C}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{14599DDF-0049-4FB6-9C6C-88602246DC0C}.Debug|Any CPU.Build.0 = Debug|x64
+		{14599DDF-0049-4FB6-9C6C-88602246DC0C}.Release|Any CPU.ActiveCfg = Release|x64
+		{14599DDF-0049-4FB6-9C6C-88602246DC0C}.Release|Any CPU.Build.0 = Release|x64
+		{60D04FE2-7A1D-4D0B-A1BF-C2C49EED8C2C}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{60D04FE2-7A1D-4D0B-A1BF-C2C49EED8C2C}.Debug|Any CPU.Build.0 = Debug|x64
+		{60D04FE2-7A1D-4D0B-A1BF-C2C49EED8C2C}.Release|Any CPU.ActiveCfg = Release|x64
+		{60D04FE2-7A1D-4D0B-A1BF-C2C49EED8C2C}.Release|Any CPU.Build.0 = Release|x64
+		{A075BBA9-2839-4446-83E6-50A03506647C}.Debug|Any CPU.ActiveCfg = Debug|x64
+		{A075BBA9-2839-4446-83E6-50A03506647C}.Debug|Any CPU.Build.0 = Debug|x64
+		{A075BBA9-2839-4446-83E6-50A03506647C}.Release|Any CPU.ActiveCfg = Release|x64
+		{A075BBA9-2839-4446-83E6-50A03506647C}.Release|Any CPU.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

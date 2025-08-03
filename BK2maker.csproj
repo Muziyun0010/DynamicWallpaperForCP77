@@ -1,0 +1,45 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net8.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+	  <Optimize>True</Optimize>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<None Remove="ffmpeg.exe" />
+		<None Remove="ffprobe.exe" />
+		<None Remove="init.lua" />
+		<None Remove="radvideo64.exe" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<EmbeddedResource Include="ffmpeg.exe" />
+		<EmbeddedResource Include="ffprobe.exe" />
+		<EmbeddedResource Include="init.lua" />
+		<EmbeddedResource Include="radvideo64.exe" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="FlaUI.Core" Version="5.0.0" />
+		<PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Common\WolvenKit.Common.csproj" />
+		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Core\WolvenKit.Core.csproj" />
+		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.RED4\WolvenKit.RED4.csproj" />
+	</ItemGroup>
+	<ItemGroup>
+		<Reference Include="Accessibility">
+			<HintPath>$(SystemRoot)\Microsoft.NET\Framework\v4.0.30319\Accessibility.dll</HintPath>
+			<Private>true</Private>
+		</Reference>
+	</ItemGroup>
+
+</Project>
