@@ -15,6 +15,12 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<Compile Remove="BuildTools\**\*.cs" />
+		<EmbeddedResource Remove="BuildTools\**\*" />
+		<None Remove="BuildTools\**\*" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<None Remove="ffmpeg.exe" />
 		<None Remove="ffprobe.exe" />
 		<None Remove="init.lua" />

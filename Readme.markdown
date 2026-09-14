@@ -26,8 +26,11 @@
 - **⚠ 请确保路径中不包含中文字符，否则可能导致生成失败。**  
   **⚠ Make sure your folder path does not contain any Chinese characters, or the process may fail.**
 
-- 每个视频会自动压缩、裁剪并转换为兼容格式。  
-  Each video will be automatically compressed, cropped, and converted.
+- 每个视频会自动压缩并转换为兼容格式；超高分辨率视频会保持原始宽高比缩放。  
+  Each video will be automatically compressed and converted; oversized videos are scaled while preserving their original aspect ratio.
+
+- 转换时会做轻微的色彩补偿，以抵消游戏内电脑屏幕显示时的饱和度损失；不会额外提高亮度或对比度。  
+  A small color correction is applied during conversion to compensate for saturation loss on in-game computer displays; brightness and contrast are not boosted.
 
 - **⚠ 程序运行时会弹出控制台窗口，请勿随意拖动、缩放或最小化，以免影响进度条显示。**  
   **⚠ A console window will pop up during execution — do not move, resize, or minimize it to avoid breaking the progress display.**

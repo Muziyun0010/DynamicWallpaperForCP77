@@ -724,14 +724,20 @@ namespace BK2maker
                                           BufferSize, FileOptions.SequentialScan);
             stream.CopyTo(fs, BufferSize);
         }
-        public static void Generate(string outputDir, int count)
+        public static void Generate(string outputDir, int count, IReadOnlyList<double>? aspects = null)
         {
             if (!Directory.Exists(outputDir))
             {
                 Directory.CreateDirectory(outputDir);
             }
 
-            var jsonObject = new { count };
+            object jsonObject = aspects == null
+                ? new { count }
+                : new
+                {
+                    count,
+                    aspects = aspects.Select(x => Math.Round(x, 6)).ToArray()
+                };
 
             string json = JsonSerializer.Serialize(jsonObject, new JsonSerializerOptions
             {

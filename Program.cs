@@ -15,6 +15,10 @@ using SharpDX.DXGI;
 
 public class Bink2Maker
 {
+    // Cyberpunk's computer-display pipeline makes Bink video look slightly
+    // less saturated than the source. Keep this correction deliberately small;
+    // brightness, contrast and gamma remain untouched.
+    const double SaturationCompensation = 1.12;
     static readonly string Root = AppContext.BaseDirectory;
     static readonly string RootX = Path.Combine(Root, "Resources");
     static readonly string VideoDir = Path.Combine(Directory.GetParent(Root).Parent.FullName, "PlaceYourMp4Here");
@@ -32,6 +36,7 @@ public class Bink2Maker
     static readonly string luaPath = Path.Combine(binPath,"init.lua");
 
     static ConcurrentDictionary<string,int> videoInfos = new();
+    static ConcurrentDictionary<int,double> videoAspects = new();
 
     static int Main(string[] args)
     {
@@ -106,14 +111,11 @@ public class Bink2Maker
         var tasks = new List<Task>();
         var failures = new ConcurrentBag<(string Name, Exception Error)>();
 
-        // FFmpeg is CPU-heavy; running one encoder per logical core made large batches
-        // slower and less reliable on user machines. Keep a small bounded pool instead.
-        int maxFfmpegThreads = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
-        using var ffmpegSemaphore = new SemaphoreSlim(maxFfmpegThreads);
-
-        // RAD Video Tools opens a progress window for each conversion. Serialising this
-        // stage avoids many UI windows racing each other and makes progress detection stable.
-        using var radSemaphore = new SemaphoreSlim(1, 1);
+        // Throughput is the priority. Keep only two logical processors in reserve and let
+        // independent videos move through FFmpeg -> RAD concurrently.
+        int maxWorkers = Math.Min(mp4Files.Length, Math.Max(1, Environment.ProcessorCount - 2));
+        int ffmpegThreadsPerWorker = Math.Max(1, Environment.ProcessorCount / Math.Max(1, maxWorkers));
+        using var pipelineSemaphore = new SemaphoreSlim(maxWorkers, maxWorkers);
 
         for (int i = 0; i < mp4Files.Length; i++)
         {
@@ -123,44 +125,51 @@ public class Bink2Maker
 
             var nameIndex = index.ToString("D2");
             var sourceMp4 = mp4Files[index];
+            var videoIndex = index;
 
             tasks.Add(Task.Run(() =>
             {
+                pipelineSemaphore.Wait();
                 try
                 {
-                    var enhancedMp4 = Path.Combine(TempDir, $"temp_{nameIndex}.mp4");
+                    var info = GetVideoInfo(sourceMp4);
+                    videoAspects[videoIndex] = (double)info.Width / info.Height;
+                    string radInput = sourceMp4;
 
-                    ffmpegSemaphore.Wait();
-                    try
+                    if (CanUseFastPath(info))
                     {
-                        RunFfmpegWithFrameProgress(sourceMp4, enhancedMp4, label);
+                        ConsoleHelper.Info(
+                            $"{label} 可直接转换，跳过 FFmpeg 预处理",
+                            $"{label} is already compatible; skipping FFmpeg preprocessing");
                     }
-                    finally
+                    else
                     {
-                        ffmpegSemaphore.Release();
+                        var enhancedMp4 = Path.Combine(TempDir, $"temp_{nameIndex}.mp4");
+                        RunFfmpegWithFrameProgress(
+                            sourceMp4,
+                            enhancedMp4,
+                            label,
+                            ffmpegThreadsPerWorker,
+                            info);
+                        radInput = enhancedMp4;
                     }
 
                     var outputBik = Path.Combine(outputDir, $"wallpaper_{nameIndex}.bk2");
-
-                    radSemaphore.Wait();
-                    try
-                    {
-                        ConsoleHelper.ResetProgress(label);
-                        HiddenProcessRunner.RunProcess(
-                            radvideo64Path,
-                            $"binkc \"{enhancedMp4}\" \"{outputBik}\"",
-                            nameIndex,
-                            outputBik,
-                            label);
-                    }
-                    finally
-                    {
-                        radSemaphore.Release();
-                    }
+                    ConsoleHelper.ResetProgress(label);
+                    HiddenProcessRunner.RunProcess(
+                        radvideo64Path,
+                        $"binkc \"{radInput}\" \"{outputBik}\"",
+                        nameIndex,
+                        outputBik,
+                        label);
                 }
                 catch (Exception ex)
                 {
                     failures.Add((fileName, ex));
+                }
+                finally
+                {
+                    pipelineSemaphore.Release();
                 }
             }));
         }
@@ -179,6 +188,13 @@ public class Bink2Maker
 
             throw new InvalidOperationException($"{failures.Count} 个视频转换失败，已停止打包。 / {failures.Count} video(s) failed; packaging was stopped.");
         }
+
+        ResourceExtractor.Generate(
+            binPath,
+            mp4Files.Length,
+            Enumerable.Range(0, mp4Files.Length)
+                .Select(i => videoAspects[i])
+                .ToArray());
 
         ConsoleHelper.Info("所有视频转换完成", "All videos converted successfully");
 
@@ -208,9 +224,41 @@ public class Bink2Maker
         if (name.Length <= 10) return name;
         return name.Substring(0, 10) + "...";
     }
-    private static void RunFfmpegWithFrameProgress(string input, string output, string label)
+    private static bool CanUseFastPath(VideoInfo info)
     {
-        var info = GetVideoInfo(input);
+        // A direct RAD path cannot apply the color compensation below.
+        // Keep the fast-path implementation available, but only use it when
+        // preprocessing is genuinely unnecessary.
+        if (Math.Abs(SaturationCompensation - 1.0) > 0.0001)
+            return false;
+
+        if (info.IsHdr)
+            return false;
+
+        if (info.Width > 2560 || info.Height > 1440)
+            return false;
+
+        if (!string.Equals(info.CodecName, "h264", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Keep the direct path deliberately conservative. yuv420p is the most broadly
+        // compatible input for the RAD/Bink encoder and needs no color/pixel conversion.
+        if (!string.Equals(info.PixelFormat, "yuv420p", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        return info.Width > 0
+            && info.Height > 0
+            && (info.Width & 1) == 0
+            && (info.Height & 1) == 0;
+    }
+
+    private static void RunFfmpegWithFrameProgress(
+        string input,
+        string output,
+        string label,
+        int threadCount,
+        VideoInfo info)
+    {
         videoInfos.TryAdd(input,(int)info.TotalFrames);
         bool needResize = info.Width > 2560 || info.Height > 1440;
         bool isHdr = info.IsHdr;
@@ -219,27 +267,30 @@ public class Bink2Maker
         List<string> filters = new();
         if (isHdr)
         {
-            filters.Add("eq=saturation = 8");
-            filters.Add("zscale=transfer=bt709:primaries=bt709:matrix=bt709:dither=ordered");
-            filters.Add("tonemap=tonemap=hable");
-            filters.Add("eq=gamma = 1.1:contrast = 1.1");
+            // Convert HDR to SDR without the old saturation/gamma boosts. Those boosts
+            // made the result look much brighter and more saturated on in-game displays.
+            filters.Add("zscale=t=linear:npl=100");
+            filters.Add("format=gbrpf32le");
+            filters.Add("tonemap=tonemap=hable:desat=0");
+            filters.Add("zscale=t=bt709:p=bt709:m=bt709:r=tv:dither=ordered");
         }
-        else
-        {
-            var ffFilter = "eq=saturation=3.5,eq=contrast=1.1,curves=master='0/0 0.2/0.25 0.5/0.5 0.75/0.6 0.8/0.7 1/1'";
-            filters.Add(ffFilter);
-        }
+
+        filters.Add($"eq=saturation={SaturationCompensation.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+
         if (needResize)
         {
-            ConsoleHelper.Warn($"{label} 分辨率超过 2K，正在缩放为 2560x1440", $"{label} resolution exceeds 2K, resizing to 2560x1440");
-            filters.Add("scale=2560:1440");
+            ConsoleHelper.Warn(
+                $"{label} 分辨率超过 2K，正在等比例缩放至 2560x1440 范围内",
+                $"{label} resolution exceeds 2K, scaling proportionally to fit within 2560x1440");
+            filters.Add("scale=w='min(2560,iw)':h='min(1440,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2");
         }
 
-
-        string finalFilter = string.Join(",", filters);
+        string filterArg = filters.Count > 0
+            ? $"-vf \"{string.Join(",", filters)}\" "
+            : string.Empty;
 
         var psi = new ProcessStartInfo(ffmpegPath,
-            $"-y -i \"{input}\" -vf \"{finalFilter}\" -c:v libx264 -pix_fmt yuv420p -preset slow -crf 18 -progress pipe:1 -nostats \"{output}\"")
+            $"-y -i \"{input}\" {filterArg}-c:v libx264 -pix_fmt yuv420p -preset veryfast -crf 18 -threads {threadCount} -progress pipe:1 -nostats \"{output}\"")
         {
             RedirectStandardOutput = true,
             UseShellExecute = false,
@@ -281,8 +332,8 @@ public class Bink2Maker
 
     private static VideoInfo GetVideoInfo(string input)
     {
-        var args = $"-v error -select_streams v:0 -count_frames " +
-                   "-show_entries stream=width,height,r_frame_rate,avg_frame_rate,nb_frames," +
+        var args = $"-v error -select_streams v:0 " +
+                   "-show_entries stream=codec_name,width,height,r_frame_rate,avg_frame_rate,nb_frames," +
                    "pix_fmt,color_space,color_transfer,color_primaries,duration " +
                    "-of json";
 
@@ -302,6 +353,12 @@ public class Bink2Maker
 
         int width = stream.GetProperty("width").GetInt32();
         int height = stream.GetProperty("height").GetInt32();
+        string codecName = stream.TryGetProperty("codec_name", out var codec)
+            ? codec.GetString() ?? ""
+            : "";
+        string pixelFormat = stream.TryGetProperty("pix_fmt", out var pixFmt)
+            ? pixFmt.GetString() ?? ""
+            : "";
 
         // 优先 nb_frames，其次 duration × avg_frame_rate
         int totalFrames = 1;
@@ -334,10 +391,22 @@ public class Bink2Maker
 
         bool isHdr = color.Contains("2020") || color.Contains("2084") || color.Contains("pq") || color.Contains("hlg");
 
-        return new VideoInfo(width, height, Math.Max(totalFrames, 1), isHdr);
+        return new VideoInfo(
+            width,
+            height,
+            Math.Max(totalFrames, 1),
+            isHdr,
+            codecName,
+            pixelFormat);
     }
 
-    private record VideoInfo(int Width, int Height, long TotalFrames, bool IsHdr);
+    private record VideoInfo(
+        int Width,
+        int Height,
+        long TotalFrames,
+        bool IsHdr,
+        string CodecName,
+        string PixelFormat);
 }
 
 public static class WolveKit
