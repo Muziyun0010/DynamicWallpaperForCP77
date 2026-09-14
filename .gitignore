@@ -1,0 +1,11 @@
+.vs/
+bin/
+obj/
+release/
+**/bin/
+**/obj/
+*.user
+Properties/PublishProfiles/
+ffmpeg.exe
+ffprobe.exe
+radvideo64.exe

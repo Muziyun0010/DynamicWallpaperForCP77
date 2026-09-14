@@ -10,8 +10,8 @@
 1. 将你想要转换的 MP4 视频放入 `PlaceYourMp4Here` 文件夹。  
    Put the MP4 videos you want to convert into the `PlaceYourMp4Here` folder.
 
-2. 双击运行 `ClickHere.exe`。  
-   Double-click `ClickHere.exe` to start the program.
+2. 双击运行 `ClickHere.bat`。  
+   Double-click `ClickHere.bat` to start the program.
 
 3. 程序会自动处理前 **30 个视频**，并生成最终的 `DynamicWallpaper.zip` 文件。  
    The program will automatically process the **first 30 videos**, then generate a final `DynamicWallpaper.zip`.

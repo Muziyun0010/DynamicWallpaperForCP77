@@ -5,15 +5,12 @@ using WolvenKit;
 using WolvenKit.Common.Services;
 using WolvenKit.Helpers;
 using WolvenKit.RED4.Archive.IO;
-using FlaUI.Core.AutomationElements;
-using FlaUI.UIA3;
 using System.Runtime.InteropServices;
 using WolvenKit.RED4.Types;
 using BK2maker;
 using System.IO.Compression;
 using System.Reflection.Emit;
 using System.Collections.Concurrent;
-using FlaUI.Core.WindowsAPI;
 using SharpDX.DXGI;
 
 public class Bink2Maker
@@ -27,7 +24,6 @@ public class Bink2Maker
     const string ffprobeResource = "BK2maker.ffprobe.exe";
     static readonly string ffmpegPath = Path.Combine(RootX, "ffmpeg.exe");
     static readonly string ffprobePath = Path.Combine(RootX, "ffprobe.exe");
-    static readonly string WwisePath = Path.Combine(Root, "WwiseConsole.exe");
 
     const string radvideo64Resource = "BK2maker.radvideo64.exe";
     static readonly string radvideo64Path = Path.Combine(RootX, "radvideo64.exe");
@@ -39,15 +35,27 @@ public class Bink2Maker
 
     static int Main(string[] args)
     {
-        if (args.Length == 0)
+        try
         {
-            GenerateBk2Batch();
+            if (args.Length == 0)
+            {
+                GenerateBk2Batch();
+            }
+            else
+            {
+                RunAsSubConsole();
+            }
+            return 0;
         }
-        else
+        catch (Exception ex)
         {
-            RunAsSubConsole();
+            ConsoleHelper.Error(
+                $"程序发生错误：{ex.GetBaseException().Message}",
+                $"The program encountered an error: {ex.GetBaseException().Message}");
+            Console.WriteLine(ex);
+            ConsoleHelper.Quit();
+            return 1;
         }
-        return 0;
     }
 
     static void RunAsSubConsole()
@@ -68,6 +76,7 @@ public class Bink2Maker
 
     public static void GenerateBk2Batch()
     {
+        CleanupWorkingDirectories();
         Directory.CreateDirectory(TempDir);
 
         var mp4Files = Directory.EnumerateFiles(VideoDir, "*.mp4")
@@ -95,15 +104,22 @@ public class Bink2Maker
         Directory.CreateDirectory(outputDir);
 
         var tasks = new List<Task>();
-        int maxThreads = Math.Max(Environment.ProcessorCount - 2, 1);
-        using var semaphore = new SemaphoreSlim(maxThreads);
+        var failures = new ConcurrentBag<(string Name, Exception Error)>();
+
+        // FFmpeg is CPU-heavy; running one encoder per logical core made large batches
+        // slower and less reliable on user machines. Keep a small bounded pool instead.
+        int maxFfmpegThreads = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
+        using var ffmpegSemaphore = new SemaphoreSlim(maxFfmpegThreads);
+
+        // RAD Video Tools opens a progress window for each conversion. Serialising this
+        // stage avoids many UI windows racing each other and makes progress detection stable.
+        using var radSemaphore = new SemaphoreSlim(1, 1);
 
         for (int i = 0; i < mp4Files.Length; i++)
         {
-            semaphore.Wait();
             int index = i;
             string fileName = Path.GetFileNameWithoutExtension(mp4Files[index]);
-            string label = TrimLabel(fileName);
+            string label = $"{index + 1:D2}:{TrimLabel(fileName)}";
 
             var nameIndex = index.ToString("D2");
             var sourceMp4 = mp4Files[index];
@@ -113,25 +129,57 @@ public class Bink2Maker
                 try
                 {
                     var enhancedMp4 = Path.Combine(TempDir, $"temp_{nameIndex}.mp4");
-                    RunFfmpegWithFrameProgress(sourceMp4, enhancedMp4, label);
+
+                    ffmpegSemaphore.Wait();
+                    try
+                    {
+                        RunFfmpegWithFrameProgress(sourceMp4, enhancedMp4, label);
+                    }
+                    finally
+                    {
+                        ffmpegSemaphore.Release();
+                    }
 
                     var outputBik = Path.Combine(outputDir, $"wallpaper_{nameIndex}.bk2");
-                    var outputWav = Path.Combine(outputDir, $"wallpaper_{nameIndex}.wav");
 
-                    HiddenProcessRunner.RunProcess(radvideo64Path,
-                        $"binkc \"{enhancedMp4}\" \"{outputBik}\"", nameIndex);
-                    TSound(enhancedMp4,outputWav);
+                    radSemaphore.Wait();
+                    try
+                    {
+                        ConsoleHelper.ResetProgress(label);
+                        HiddenProcessRunner.RunProcess(
+                            radvideo64Path,
+                            $"binkc \"{enhancedMp4}\" \"{outputBik}\"",
+                            nameIndex,
+                            outputBik,
+                            label);
+                    }
+                    finally
+                    {
+                        radSemaphore.Release();
+                    }
                 }
-                finally
+                catch (Exception ex)
                 {
-                    semaphore.Release();
+                    failures.Add((fileName, ex));
                 }
             }));
         }
 
         Task.WaitAll(tasks.ToArray());
         ConsoleHelper.CompleteProgressBars();
-        ConsoleHelper.Info("开始转换声音文件", "Start converting sound files");
+
+        if (!failures.IsEmpty)
+        {
+            foreach (var failure in failures.OrderBy(x => x.Name))
+            {
+                ConsoleHelper.Error(
+                    $"{failure.Name} 转换失败：{failure.Error.GetBaseException().Message}",
+                    $"Failed to convert {failure.Name}: {failure.Error.GetBaseException().Message}");
+            }
+
+            throw new InvalidOperationException($"{failures.Count} 个视频转换失败，已停止打包。 / {failures.Count} video(s) failed; packaging was stopped.");
+        }
+
         ConsoleHelper.Info("所有视频转换完成", "All videos converted successfully");
 
         if (Directory.Exists(TempDir))
@@ -140,55 +188,25 @@ public class Bink2Maker
         WolveKit.GetPack();
     }
 
+    private static void CleanupWorkingDirectories()
+    {
+        foreach (var path in new[]
+                 {
+                     TempDir,
+                     Path.Combine(Root, "archive"),
+                     Path.Combine(Root, "output")
+                 })
+        {
+            if (Directory.Exists(path))
+                Directory.Delete(path, true);
+        }
+    }
+
     private static string TrimLabel(string name)
     {
         if (string.IsNullOrEmpty(name)) return "Unknown";
         if (name.Length <= 10) return name;
         return name.Substring(0, 10) + "...";
-    }
-
-    private static void TSound(string input,string output) 
-    {
-        var psi = new ProcessStartInfo(ffmpegPath,
-           $"-y -i \"{input}\" -vn -acodec pcm_s16le -ar 48000 -ac 2 \"{output}\"")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var proc = Process.Start(psi);
-        videoInfos.TryGetValue(input, out var value);
-        ConsoleHelper.PrintProgressBar(output, 0,value);
-
-        DateTime lastUpdate = DateTime.MinValue;
-
-        while (!proc.StandardOutput.EndOfStream)
-        {
-            var line = proc.StandardOutput.ReadLine();
-            if (line != null && line.StartsWith("frame="))
-            {
-                if (long.TryParse(line.Split('=')[1], out var current))
-                {
-                    var frame = Math.Clamp(current, 0,value);
-                    var now = DateTime.Now;
-                    if ((now - lastUpdate).TotalMilliseconds > 100)
-                    {
-                        ConsoleHelper.PrintProgressBar(input, frame,value);
-                        lastUpdate = now;
-                    }
-                }
-            }
-            else if (line != null && line.StartsWith("progress=end"))
-            {
-                ConsoleHelper.PrintProgressBar(input, value, value);
-                break;
-            }
-        }
-
-        proc.WaitForExit();
-        if (proc.ExitCode != 0)
-            throw new Exception($"FFmpeg 退出码非零: {proc.ExitCode}");
     }
     private static void RunFfmpegWithFrameProgress(string input, string output, string label)
     {

@@ -1,6 +1,4 @@
-﻿using FlaUI.Core.AutomationElements;
-using FlaUI.UIA3;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
@@ -87,7 +85,7 @@ namespace BK2maker
         const uint SWP_NOZORDER = 0x0004;
         const uint SWP_FRAMECHANGED = 0x0020;
 
-        public static void RunProcess(string exePath, string arguments, string nameIndex)
+        public static void RunProcess(string exePath, string arguments, string nameIndex, string expectedOutputPath, string progressLabel)
         {
             STARTUPINFO si = new STARTUPINFO();
             si.cb = Marshal.SizeOf(si);
@@ -116,17 +114,25 @@ namespace BK2maker
 
             try
             {
-                string label = $"wallpaper_{nameIndex}.bk2";
-                Task.Run(() =>
+                string label = progressLabel;
+                var monitorTask = Task.Run(() =>
                 {
-                    List<AutomationElement> windows = new();
-                    while (windows.Count < 1)
+                    IntPtr hwnd = IntPtr.Zero;
+                    var windowDeadline = DateTime.UtcNow.AddSeconds(15);
+                    while (hwnd == IntPtr.Zero && DateTime.UtcNow < windowDeadline)
                     {
-                        windows = ProcessWindowFinder.GetProcessWindows(pi.dwProcessId);
+                        hwnd = ProcessWindowFinder.GetProcessWindow(pi.dwProcessId);
+                        if (ProcessWindowFinder.HasProcessExited(pi.dwProcessId))
+                            return;
                         Thread.Sleep(100);
                     }
+
+                    // Some RAD versions do not expose a UI Automation window at all.
+                    // Conversion can still complete successfully, so the window is optional.
+                    if (hwnd == IntPtr.Zero)
+                        return;
+
                     string title;
-                    IntPtr hwnd = windows[0].FrameworkAutomationElement.NativeWindowHandle;
 
                     int exStyle = GetWindowLong(hwnd, GWL_EXSTYLE);
                     if (exStyle == 0)
@@ -157,25 +163,37 @@ namespace BK2maker
                     }
 
 
-                    while (true)
+                    while (!ProcessWindowFinder.HasProcessExited(pi.dwProcessId))
                     {
-                        title = ProcessWindowFinder.GetVisibleWindowTitle(windows[0]);
-                        if (title.Contains("Done")) break;
-
-                        int percentIndex = title.IndexOf('%');
-                        if (percentIndex > 0)
+                        title = ProcessWindowFinder.GetWindowTitle(hwnd);
+                        if (TryReadPercent(title, out var percent))
                         {
-                            var percent = long.Parse(title.Split('%')[0]);
                             ConsoleHelper.PrintProgressBar(label, percent, 100);
                         }
+
+                        if (IsCompletionTitle(title))
+                        {
+                            ConsoleHelper.PrintProgressBar(label, 100, 100);
+                            if (!ProcessWindowFinder.ClickCompletionButton(hwnd))
+                            {
+                                // If the exact button text differs between RAD versions/locales,
+                                // closing a completed window is safer than waiting forever.
+                                ProcessWindowFinder.CloseWindow(hwnd);
+                            }
+                            return;
+                        }
+
                         Thread.Sleep(200);
                     }
-
-                    ConsoleHelper.PrintProgressBar(label, 100, 100);
-                    ProcessWindowFinder.ClickButtonByName(windows[0], "Done");
                 });
 
                 WaitForSingleObject(pi.hProcess, uint.MaxValue);
+                monitorTask.Wait(TimeSpan.FromSeconds(2));
+
+                if (!File.Exists(expectedOutputPath) || new FileInfo(expectedOutputPath).Length == 0)
+                    throw new InvalidOperationException($"RAD Video Tools 未生成输出文件: {expectedOutputPath}");
+
+                ConsoleHelper.PrintProgressBar(label, 100, 100);
             }
             finally
             {
@@ -183,76 +201,143 @@ namespace BK2maker
                 CloseHandle(pi.hThread);
             }
         }
+
+        private static bool TryReadPercent(string title, out long percent)
+        {
+            percent = 0;
+            int percentIndex = title.IndexOf('%');
+            if (percentIndex <= 0)
+                return false;
+
+            int start = percentIndex - 1;
+            while (start >= 0 && char.IsDigit(title[start]))
+                start--;
+            start++;
+
+            return start < percentIndex &&
+                   long.TryParse(title[start..percentIndex], out percent) &&
+                   percent is >= 0 and <= 100;
+        }
+
+        private static bool IsCompletionTitle(string title)
+        {
+            return title.Contains("Done", StringComparison.OrdinalIgnoreCase) ||
+                   title.Contains("Finished", StringComparison.OrdinalIgnoreCase) ||
+                   title.Contains("Complete", StringComparison.OrdinalIgnoreCase) ||
+                   title.Contains("完成", StringComparison.OrdinalIgnoreCase);
+        }
     }
 
 
-    public class ProcessWindowFinder
+    public static class ProcessWindowFinder
     {
-        public static List<AutomationElement> GetProcessWindows(int processId)
-        {
-            var windows = new List<AutomationElement>();
-            using var automation = new UIA3Automation();
+        private const uint WM_CLOSE = 0x0010;
+        private const uint BM_CLICK = 0x00F5;
 
-            foreach (var proc in Process.GetProcesses())
-            {
-                if (proc.Id != processId)
-                    continue;
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
-                var mainWindowHandle = proc.MainWindowHandle;
-                if (mainWindowHandle != IntPtr.Zero)
-                {
-                    try
-                    {
-                        var elem = automation.FromHandle(mainWindowHandle);
-                        if (elem != null)
-                        {
-                            windows.Add(elem);
-                        }
-                    }
-                    catch { }
-                }
-            }
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
-            return windows;
-        }
+        [DllImport("user32.dll")]
+        private static extern bool EnumWindows(EnumWindowsProc enumFunc, IntPtr lParam);
 
-        /// <summary>
-        /// 获取窗口标题
-        /// </summary>
-        public static string GetVisibleWindowTitle(AutomationElement window)
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc enumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        [DllImport("user32.dll")]
+        private static extern int GetWindowTextLength(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        public static bool HasProcessExited(int processId)
         {
             try
             {
-                return window.Name;
+                using var process = Process.GetProcessById(processId);
+                return process.HasExited;
             }
-            catch (Exception ex)
+            catch (ArgumentException)
             {
-                return $"Error: {ex.Message}";
+                return true;
             }
         }
-        public static bool ClickButtonByName(AutomationElement window, string buttonName)
+
+        public static void CloseWindow(IntPtr hwnd)
         {
-            if (window == null || string.IsNullOrEmpty(buttonName)) return false;
+            if (hwnd != IntPtr.Zero)
+                PostMessage(hwnd, WM_CLOSE, IntPtr.Zero, IntPtr.Zero);
+        }
 
-            try
+        public static IntPtr GetProcessWindow(int processId)
+        {
+            IntPtr found = IntPtr.Zero;
+            EnumWindows((hWnd, _) =>
             {
-                var button = window.FindFirstDescendant(cf => cf.ByControlType(FlaUI.Core.Definitions.ControlType.Button).And(cf.ByName(buttonName)));
-
-                if (button != null)
+                GetWindowThreadProcessId(hWnd, out var ownerPid);
+                if (ownerPid == (uint)processId)
                 {
-                    if (button.Patterns.Invoke.IsSupported)
-                    {
-                        button.Patterns.Invoke.Pattern.Invoke();
-                        return true;
-                    }
+                    found = hWnd;
+                    return false;
                 }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"点击按钮失败: {ex.Message}");
-            }
+                return true;
+            }, IntPtr.Zero);
+            return found;
+        }
 
-            return false;
+        public static string GetWindowTitle(IntPtr window)
+        {
+            if (window == IntPtr.Zero)
+                return string.Empty;
+
+            int length = GetWindowTextLength(window);
+            var buffer = new StringBuilder(Math.Max(length + 1, 256));
+            GetWindowText(window, buffer, buffer.Capacity);
+            return buffer.ToString();
+        }
+
+        public static bool ClickCompletionButton(IntPtr window)
+        {
+            if (window == IntPtr.Zero)
+                return false;
+
+            var acceptedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "Done", "Close", "OK", "完成", "关闭", "确定" };
+            IntPtr foundButton = IntPtr.Zero;
+
+            EnumChildWindows(window, (hWnd, _) =>
+            {
+                var className = new StringBuilder(64);
+                GetClassName(hWnd, className, className.Capacity);
+                if (!className.ToString().Equals("Button", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var text = new StringBuilder(128);
+                GetWindowText(hWnd, text, text.Capacity);
+                if (acceptedNames.Contains(text.ToString().Trim()))
+                {
+                    foundButton = hWnd;
+                    return false;
+                }
+
+                return true;
+            }, IntPtr.Zero);
+
+            if (foundButton == IntPtr.Zero)
+                return false;
+
+            SendMessage(foundButton, BM_CLICK, IntPtr.Zero, IntPtr.Zero);
+            return true;
         }
     }
 
@@ -294,7 +379,7 @@ namespace BK2maker
             {
                 if (!_cursorHidden)
                 {
-                    Console.CursorVisible = false;
+                    try { Console.CursorVisible = false; } catch { }
                     _cursorHidden = true;
                 }
 
@@ -318,7 +403,7 @@ namespace BK2maker
                 {
                     PrintBar(line, label, text);
                 }
-                else if (_lineMap.Count < 20)
+                else if (_lineMap.Count < 30)
                 {
                     if (_nextLine == -1)
                     {
@@ -330,22 +415,19 @@ namespace BK2maker
 
                     PrintBar(line, label, text);
                 }
-                else if (!_sublineMap.TryGetValue(label, out line))
-                {
-                    if (_subConsoleProcess == null)
-                    {
-                        StartSubConsole();
-                    }
-                    line = Interlocked.Increment(ref _subnextLine) - 1;
-                    _sublineMap.Add(label, line);
-                    RefreshSubConsole($"{line},{label},{text}");
-                }
-                else
-                {
-                    RefreshSubConsole($"{line},{label},{text}");
-                }
+                // The tool accepts at most 30 videos, so all progress rows now stay in
+                // the main console. This removes the fragile second-console IPC path.
             }
         }
+
+        public static void ResetProgress(string label)
+        {
+            lock (_lock)
+            {
+                _completed.Remove(label);
+            }
+        }
+
         public static void PrintBar(int line, string label, string text)
         {
             int windowWidth = 80;
@@ -381,7 +463,7 @@ namespace BK2maker
             {
                 if (_cursorHidden)
                 {
-                    Console.CursorVisible = true;
+                    try { Console.CursorVisible = true; } catch { }
                     _cursorHidden = false;
                 }
 
@@ -604,7 +686,11 @@ namespace BK2maker
 
                 SetForegroundWindow(handle); // 激活
             }
-            Console.ReadKey(true);
+
+            if (!Console.IsInputRedirected)
+            {
+                try { Console.ReadKey(true); } catch { }
+            }
         }
     }
 
@@ -727,19 +813,6 @@ namespace BK2maker
             _accessor?.Dispose();
             _mmf?.Dispose();
             _event?.Dispose();
-        }
-    }
-
-    class AudioBankGenerator
-    {
-        public static void ExtractAndConvertToBnk()
-        {
-            var args = $"generate-soundbank -project \"{projectPath}\" -platform Windows -language SFX";
-            RunWwiseConsole(args);
-
-            var generatedBnk = Path.Combine(wwiseSoundBankOutputDir, "Windows", "SFX", "MyBank.bnk");
-            File.Move(generatedBnk, bnkOutputPath, overwrite: true);
-            Directory.Delete(wwiseSoundBankOutDir, true );
         }
     }
 }

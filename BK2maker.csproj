@@ -5,6 +5,9 @@
 		<TargetFramework>net8.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
+		<Version>1.1.0</Version>
+		<AssemblyVersion>1.1.0.0</AssemblyVersion>
+		<FileVersion>1.1.0.0</FileVersion>
 	</PropertyGroup>
 
 	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -26,20 +29,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<PackageReference Include="FlaUI.Core" Version="5.0.0" />
-		<PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
-	</ItemGroup>
-
-	<ItemGroup>
 		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Common\WolvenKit.Common.csproj" />
 		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.Core\WolvenKit.Core.csproj" />
 		<ProjectReference Include="..\..\Downloads\WolvenKit-main\WolvenKit-main\WolvenKit.RED4\WolvenKit.RED4.csproj" />
-	</ItemGroup>
-	<ItemGroup>
-		<Reference Include="Accessibility">
-			<HintPath>$(SystemRoot)\Microsoft.NET\Framework\v4.0.30319\Accessibility.dll</HintPath>
-			<Private>true</Private>
-		</Reference>
 	</ItemGroup>
 
 </Project>
